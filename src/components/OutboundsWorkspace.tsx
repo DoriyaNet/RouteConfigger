@@ -19,6 +19,7 @@ import {
   type OutboundGenerationResult,
   type OutboundProtocol,
 } from "../lib/outbounds";
+import { kernelMeta, type KernelKind } from "../lib/kernel";
 import { formatBytes } from "../lib/routes";
 import { JsonOutputPanel } from "./JsonOutputPanel";
 
@@ -61,12 +62,24 @@ const SHADOWSOCKS_METHODS = [
   "2022-blake3-chacha20-poly1305",
 ];
 
-const WG_DOMAIN_STRATEGIES = ["ForceIP", "ForceIPv4", "ForceIPv6", "AsIs"];
+const WG_XRAY_DOMAIN_STRATEGIES = [
+  "ForceIP",
+  "ForceIPv4",
+  "ForceIPv6",
+  "AsIs",
+];
+const WG_SINGBOX_DOMAIN_STRATEGIES = [
+  "prefer_ipv4",
+  "prefer_ipv6",
+  "ipv4_only",
+  "ipv6_only",
+];
 
 interface OutboundsWorkspaceProps {
   drafts: OutboundDraft[];
   onChange: (drafts: OutboundDraft[]) => void;
   result: OutboundGenerationResult;
+  kernel: KernelKind;
 }
 
 interface DraftErrors {
@@ -141,6 +154,7 @@ function FormField({ label, hint, className = "", children }: FormFieldProps) {
 }
 
 interface OutboundCardProps {
+  kernel: KernelKind;
   draft: OutboundDraft;
   index: number;
   drafts: OutboundDraft[];
@@ -153,6 +167,7 @@ interface OutboundCardProps {
 }
 
 function OutboundCard({
+  kernel,
   draft,
   index,
   drafts,
@@ -164,6 +179,7 @@ function OutboundCard({
   onProtocolChange,
 }: OutboundCardProps) {
   const meta = outboundProtocolMeta[draft.protocol];
+  const singbox = kernel === "singbox";
   const extraStatus = extraSettingsStatus(draft.extraSettings);
   const proxyTagOptions = useMemo(
     () => [
@@ -304,7 +320,9 @@ function OutboundCard({
 
           <div className="ob-section-label ob-section-spaced">
             <span>协议参数</span>
-            <small>按 Xray outbound settings 生成</small>
+            <small>
+              按 {kernelMeta[kernel].outboundFormat} 生成
+            </small>
           </div>
 
           {draft.protocol === "socks" || draft.protocol === "http" ? (
@@ -373,7 +391,11 @@ function OutboundCard({
               <FormField
                 label="password"
                 className="ob-span-2"
-                hint="面板 settings 不包含 Xray TLS / transport"
+                hint={
+                  singbox
+                    ? "可在额外 Settings 中加入 tls / transport"
+                    : "面板 settings 不包含 Xray TLS / transport"
+                }
               >
                 <input
                   className="ob-input"
@@ -549,7 +571,14 @@ function OutboundCard({
                   autoComplete="off"
                 />
               </FormField>
-              <FormField label="domainStrategy">
+              <FormField
+                label="domainStrategy"
+                hint={
+                  singbox
+                    ? "ForceIPv4/ForceIPv6 会自动映射"
+                    : undefined
+                }
+              >
                 <input
                   className="ob-input"
                   type="text"
@@ -575,7 +604,9 @@ function OutboundCard({
               <small>可选</small>
             </div>
             <div className="outbound-chain-input-row">
-              <span className="chain-prefix">proxy_tag</span>
+              <span className="chain-prefix">
+                {singbox ? "detour" : "proxy_tag"}
+              </span>
               <input
                 className="ob-input"
                 type="text"
@@ -586,7 +617,7 @@ function OutboundCard({
                 }
                 aria-label={`${
                   draft.tag.trim() || `第 ${index + 1} 个 Outbound`
-                } 的 proxy_tag`}
+                } 的 ${singbox ? "detour" : "proxy_tag"}`}
                 placeholder="例如：warp、direct；留空则直接出站"
                 spellCheck={false}
                 autoComplete="off"
@@ -598,7 +629,9 @@ function OutboundCard({
               ))}
             </datalist>
             <p className="outbound-chain-hint">
-              当前出口的流量会继续交给 <code>proxy_tag</code> 指向的出口。
+              当前出口的流量会继续交给{" "}
+              <code>{singbox ? "detour" : "proxy_tag"}</code>{" "}
+              指向的出口。
             </p>
           </div>
 
@@ -639,6 +672,9 @@ function OutboundCard({
               <p>
                 必须是 JSON 对象，会深合并到自动生成的 <code>settings</code>{" "}
                 中并覆盖同名字段。
+                {singbox
+                  ? " sing-box 可直接加入 tls、transport、detour 等平铺字段。"
+                  : ""}
               </p>
             </div>
           </details>
@@ -659,10 +695,12 @@ function OutboundOutputPanel({
   result,
   draftsCount,
   onAddSocks,
+  kernel,
 }: {
   result: OutboundGenerationResult;
   draftsCount: number;
   onAddSocks: () => void;
+  kernel: KernelKind;
 }) {
   const hasErrors = result.errors.length > 0;
   const isEmpty = draftsCount === 0;
@@ -675,7 +713,7 @@ function OutboundOutputPanel({
       panelLabel="生成的 Outbounds 配置"
       kicker="GENERATED OUTBOUNDS"
       title="自定义 Outbounds"
-      targetLabel="Xboard / Xray"
+      targetLabel={`Xboard / ${kernelMeta[kernel].label}`}
       status={status}
       statusLabel={statusLabel}
       stats={[
@@ -694,15 +732,25 @@ function OutboundOutputPanel({
         actionLabel: "添加 SOCKS5",
         onAction: onAddSocks,
       }}
-      downloadName="xboard-custom-outbounds.json"
+      downloadName={`xboard-custom-outbounds-${kernel}.json`}
       note={
         <>
           <Info size={14} />
           <p>
             粘贴到{" "}
             <strong>Xboard → 节点 → 高级协议配置 → 自定义 Outbounds</strong>
-            。输出为裸数组，<code>proxy_tag</code> 必须指向已存在的出口；生成的
-            tag 可直接用于 Routes 的 <code>outboundTag</code>。
+            。输出为裸数组；
+            {kernel === "xray" ? (
+              <>
+                <code>proxy_tag</code> 必须指向已存在的出口，生成的 tag
+                可直接用于 Routes 的 <code>outboundTag</code>。
+              </>
+            ) : (
+              <>
+                sing-box 链路使用 <code>settings.detour</code>，生成的 tag
+                可直接用于 Routes 的 <code>outbound</code>。
+              </>
+            )}
           </p>
         </>
       }
@@ -714,6 +762,7 @@ export function OutboundsWorkspace({
   drafts,
   onChange,
   result,
+  kernel,
 }: OutboundsWorkspaceProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(
     () => new Set(drafts.slice(0, 1).map((draft) => draft.id)),
@@ -782,7 +831,10 @@ export function OutboundsWorkspace({
         <option value="xtls-rprx-vision" />
       </datalist>
       <datalist id="xroute-wg-domain-strategies">
-        {WG_DOMAIN_STRATEGIES.map((strategy) => (
+        {(kernel === "singbox"
+          ? WG_SINGBOX_DOMAIN_STRATEGIES
+          : WG_XRAY_DOMAIN_STRATEGIES
+        ).map((strategy) => (
           <option value={strategy} key={strategy} />
         ))}
       </datalist>
@@ -793,7 +845,8 @@ export function OutboundsWorkspace({
           <h2>编排自定义出口</h2>
           <p>
             配置 SOCKS5、Shadowsocks、VMess、WireGuard WARP
-            等外部出口，生成可直接粘贴到 Xboard 的 Outbounds 数组。
+            等外部出口，按所选内核生成可直接粘贴到 Xboard 的 Outbounds
+            数组。
           </p>
         </div>
         <div className="selection-summary">
@@ -839,12 +892,17 @@ export function OutboundsWorkspace({
             <div className="outbound-schema-copy">
               <div>
                 <span className="card-eyebrow">XBOARD SCHEMA</span>
-                <strong>结构化 Outbounds · Xray settings</strong>
+                <strong>
+                  结构化 Outbounds · {kernelMeta[kernel].outboundFormat}
+                </strong>
               </div>
               <p>
                 <code>tag</code> + <code>protocol</code> +{" "}
-                <code>settings</code> + 可选 <code>proxy_tag</code>。面板不暴露
-                Xray 的 TLS / transport，需要时请使用节点原生配置。
+                <code>settings</code> + 可选{" "}
+                <code>{kernel === "xray" ? "proxy_tag" : "detour"}</code>。
+                {kernel === "xray"
+                  ? " 面板不暴露 Xray 的 TLS / transport，需要时请使用节点原生配置。"
+                  : " TLS、transport 等字段可直接写入 settings。"}
               </p>
             </div>
             <a
@@ -873,6 +931,7 @@ export function OutboundsWorkspace({
               {drafts.map((draft, index) => (
                 <OutboundCard
                   key={draft.id}
+                  kernel={kernel}
                   draft={draft}
                   index={index}
                   drafts={drafts}
@@ -913,6 +972,7 @@ export function OutboundsWorkspace({
             result={result}
             draftsCount={drafts.length}
             onAddSocks={() => addOutbound("socks")}
+            kernel={kernel}
           />
         </div>
       </div>

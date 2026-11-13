@@ -1,4 +1,9 @@
 import { categories, serviceById } from "../data/services";
+import {
+  DEFAULT_KERNEL,
+  normalizeKernel,
+  type KernelKind,
+} from "./kernel";
 
 export const ROUTE_MODES = ["media", "global", "bypass", "direct"] as const;
 
@@ -20,7 +25,21 @@ export interface XrayRouteRule {
   network?: string;
 }
 
+export interface SingboxRouteRule {
+  action: "route" | "reject" | "sniff";
+  outbound?: string;
+  domain?: string[];
+  domain_suffix?: string[];
+  domain_regex?: string[];
+  ip_cidr?: string[];
+  protocol?: string[];
+  network?: Array<"tcp" | "udp">;
+}
+
+export type GeneratedRouteRule = XrayRouteRule | SingboxRouteRule;
+
 export interface GenerationInput {
+  kernel?: KernelKind;
   routeMode: RouteMode;
   selectedIds: ReadonlySet<string>;
   globalTag: string;
@@ -39,8 +58,9 @@ export interface ParsedCustomDomains {
 }
 
 export interface GenerationResult {
+  kernel: KernelKind;
   mode: RouteMode;
-  rules: XrayRouteRule[];
+  rules: GeneratedRouteRule[];
   json: string;
   ruleCount: number;
   domainCount: number;
@@ -153,7 +173,15 @@ function addDomains(target: string[], domains: readonly string[]) {
   }
 }
 
+function singboxRoute(
+  outbound: string,
+  fields: Omit<SingboxRouteRule, "action" | "outbound"> = {},
+): SingboxRouteRule {
+  return { action: "route", outbound, ...fields };
+}
+
 export function generateRoutes(input: GenerationInput): GenerationResult {
+  const kernel = normalizeKernel(input.kernel ?? DEFAULT_KERNEL);
   const routeMode = normalizeRouteMode(input.routeMode);
   const globalTag = normalizeTag(input.globalTag);
   const errors: string[] = [];
@@ -163,6 +191,7 @@ export function generateRoutes(input: GenerationInput): GenerationResult {
   const globalTagValid = isValidTag(globalTag);
   const parsedCustom = parseCustomDomains(input.customDomains);
   const customTag = normalizeTag(input.customDomainsTag);
+  const routeFieldName = kernel === "xray" ? "outboundTag" : "outbound";
   const requiresGlobalTag =
     routeMode === "global" ||
     routeMode === "bypass" ||
@@ -171,7 +200,17 @@ export function generateRoutes(input: GenerationInput): GenerationResult {
 
   if (requiresGlobalTag && !globalTagValid) {
     errors.push(
-      "请填写有效的全局 outboundTag（不能包含空格或 JSON 特殊字符）。",
+      `请填写有效的全局 ${routeFieldName}（不能包含空格或 JSON 特殊字符）。`,
+    );
+  }
+  if (kernel === "singbox" && routeMode === "bypass") {
+    errors.push(
+      "sing-box 原生自定义 Routes 不支持 geosite:cn / geoip:cn。请改用 Xray 内核，或使用 sing-box rule_set 配置规则集。",
+    );
+  }
+  if (kernel === "singbox" && input.blockAds) {
+    errors.push(
+      "sing-box 原生自定义 Routes 不支持 geosite:category-ads-all。请改用 Xray 内核，或通过 sing-box rule_set 拦截广告。",
     );
   }
 
@@ -187,14 +226,18 @@ export function generateRoutes(input: GenerationInput): GenerationResult {
       : globalTag;
 
     if (!isValidTag(tag)) {
-      errors.push(`「${category.name}」的 outboundTag 无效。`);
+      errors.push(`「${category.name}」的 ${routeFieldName} 无效。`);
       continue;
     }
 
     const bucket = groupedDomains.get(tag) ?? [];
     for (const service of categoryServices) {
       addDomains(bucket, service.domains);
-      if (input.includeGeosite && service.geosite) {
+      if (
+        kernel === "xray" &&
+        input.includeGeosite &&
+        service.geosite
+      ) {
         addDomains(bucket, service.geosite);
       }
     }
@@ -209,7 +252,7 @@ export function generateRoutes(input: GenerationInput): GenerationResult {
   if (parsedCustom.domains.length > 0) {
     const resolvedCustomTag = customTag || globalTag;
     if (!isValidTag(resolvedCustomTag)) {
-      errors.push("自定义域名规则的 outboundTag 无效。");
+      errors.push(`自定义域名规则的 ${routeFieldName} 无效。`);
     } else {
       const bucket = groupedDomains.get(resolvedCustomTag) ?? [];
       addDomains(bucket, parsedCustom.domains);
@@ -217,8 +260,8 @@ export function generateRoutes(input: GenerationInput): GenerationResult {
     }
   }
 
-  const rules: XrayRouteRule[] = [];
-  if (input.blockAds) {
+  const rules: GeneratedRouteRule[] = [];
+  if (input.blockAds && kernel === "xray") {
     rules.push({
       type: "field",
       outboundTag: "block",
@@ -229,11 +272,21 @@ export function generateRoutes(input: GenerationInput): GenerationResult {
     );
   }
   if (input.blockTorrent) {
-    rules.push({
-      type: "field",
-      outboundTag: "block",
-      protocol: ["bittorrent"],
-    });
+    if (kernel === "singbox") {
+      rules.push({ action: "sniff" });
+    }
+    rules.push(
+      kernel === "xray"
+        ? {
+            type: "field",
+            outboundTag: "block",
+            protocol: ["bittorrent"],
+          }
+        : {
+            action: "reject",
+            protocol: ["bittorrent"],
+          },
+    );
   }
 
   const domainOwners = new Map<string, string>();
@@ -249,69 +302,139 @@ export function generateRoutes(input: GenerationInput): GenerationResult {
     }
   }
   if (overlappingDomains.size > 0) {
+    const kernelName = kernel === "xray" ? "Xray" : "sing-box";
     warnings.push(
-      `${overlappingDomains.size} 个域名同时命中多个 outboundTag，Xray 会按规则顺序优先匹配。`,
+      `${overlappingDomains.size} 个域名同时命中多个 ${routeFieldName}，${kernelName} 会按规则顺序优先匹配。`,
     );
   }
 
   let domainCount = 0;
+  let skippedGeositeCount = 0;
   for (const [outboundTag, domains] of groupedDomains) {
     const unique = [...new Set(domains)].sort((a, b) =>
       a.localeCompare(b, "en"),
     );
     if (unique.length === 0) continue;
-    domainCount += unique.length;
-    rules.push({
-      type: "field",
-      outboundTag,
-      domain: unique,
-    });
+
+    if (kernel === "xray") {
+      domainCount += unique.length;
+      rules.push({
+        type: "field",
+        outboundTag,
+        domain: unique,
+      });
+      continue;
+    }
+
+    const exact: string[] = [];
+    const suffix: string[] = [];
+    const regex: string[] = [];
+    for (const domain of unique) {
+      if (domain.startsWith("geosite:")) {
+        skippedGeositeCount += 1;
+      } else if (domain.startsWith("full:")) {
+        exact.push(domain.slice(5));
+      } else if (domain.startsWith("regexp:")) {
+        regex.push(domain.slice(7));
+      } else if (domain.startsWith("domain:")) {
+        suffix.push(domain.slice(7));
+      } else {
+        suffix.push(domain);
+      }
+    }
+
+    if (exact.length === 0 && suffix.length === 0 && regex.length === 0) {
+      continue;
+    }
+    domainCount += exact.length + suffix.length + regex.length;
+    rules.push(
+      singboxRoute(outboundTag, {
+        ...(exact.length > 0 ? { domain: exact } : {}),
+        ...(suffix.length > 0 ? { domain_suffix: suffix } : {}),
+        ...(regex.length > 0 ? { domain_regex: regex } : {}),
+      }),
+    );
+  }
+
+  if (skippedGeositeCount > 0) {
+    warnings.push(
+      `sing-box 原生规则不支持 geosite: 字段，已跳过 ${skippedGeositeCount} 条 geosite 规则。`,
+    );
+  }
+  if (kernel === "singbox" && input.includeGeosite) {
+    warnings.push(
+      "sing-box 模式不会写入平台 geosite；请使用显式域名，或配置 sing-box rule_set。",
+    );
   }
 
   if (
     (routeMode === "global" || routeMode === "bypass") &&
     globalTagValid
   ) {
-    if (routeMode === "bypass") {
+    if (kernel === "xray") {
+      if (routeMode === "bypass") {
+        rules.push({
+          type: "field",
+          outboundTag: "direct",
+          domain: ["geosite:cn"],
+        });
+        rules.push({
+          type: "field",
+          outboundTag: "direct",
+          ip: [...PRIVATE_IP_RANGES, "geoip:cn"],
+        });
+      } else {
+        rules.push({
+          type: "field",
+          outboundTag: "direct",
+          ip: PRIVATE_IP_RANGES,
+        });
+      }
       rules.push({
         type: "field",
-        outboundTag: "direct",
-        domain: ["geosite:cn"],
+        outboundTag: globalTag,
+        network: "tcp,udp",
       });
-      rules.push({
-        type: "field",
-        outboundTag: "direct",
-        ip: [...PRIVATE_IP_RANGES, "geoip:cn"],
-      });
-    } else {
-      rules.push({
-        type: "field",
-        outboundTag: "direct",
-        ip: PRIVATE_IP_RANGES,
-      });
+    } else if (routeMode === "global") {
+      rules.push(
+        singboxRoute("direct", {
+          ip_cidr: [...PRIVATE_IP_RANGES],
+        }),
+        singboxRoute(globalTag, {
+          network: ["tcp", "udp"],
+        }),
+      );
     }
-    rules.push({
-      type: "field",
-      outboundTag: globalTag,
-      network: "tcp,udp",
-    });
   }
   if (routeMode === "direct") {
-    rules.push({
-      type: "field",
-      outboundTag: "direct",
-      network: "tcp,udp",
-    });
+    rules.push(
+      kernel === "xray"
+        ? {
+            type: "field",
+            outboundTag: "direct",
+            network: "tcp,udp",
+          }
+        : singboxRoute("direct", {
+            network: ["tcp", "udp"],
+          }),
+    );
   }
 
-  if (routeMode === "bypass") {
+  if (routeMode === "bypass" && kernel === "xray") {
     warnings.push(
       "绕过大陆模式使用 geosite:cn 与 geoip:cn，请确认节点已包含 geosite.dat 与 geoip.dat；Xboard Node 使用 AsIs 域名策略，IP 规则只匹配目标为 IP 的连接。",
     );
   }
 
   const json = JSON.stringify(rules, null, 2);
+  const tags = rules
+    .map((rule) =>
+      "outboundTag" in rule ? rule.outboundTag : rule.outbound,
+    )
+    .filter((tag): tag is string => Boolean(tag));
+
   return {
+    kernel,
     mode: routeMode,
     rules,
     json,
@@ -322,7 +445,7 @@ export function generateRoutes(input: GenerationInput): GenerationResult {
     byteSize: new TextEncoder().encode(json).length,
     errors: [...new Set(errors)],
     warnings: [...new Set(warnings)],
-    tags: [...new Set(rules.map((rule) => rule.outboundTag))],
+    tags: [...new Set(tags)],
   };
 }
 

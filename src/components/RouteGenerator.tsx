@@ -45,6 +45,12 @@ import {
   parseCustomDomains,
   type RouteMode,
 } from "../lib/routes";
+import {
+  KERNEL_KINDS,
+  kernelMeta,
+  normalizeKernel,
+  type KernelKind,
+} from "../lib/kernel";
 import { useOutboundsBuilder } from "../hooks/useOutboundsBuilder";
 import { OutboundsWorkspace } from "./OutboundsWorkspace";
 import { OutputPanel } from "./OutputPanel";
@@ -54,6 +60,7 @@ const STORAGE_KEY = ["xroute", "generator", "state", "v1"].join("-");
 type BuilderTool = "routes" | "outbounds";
 
 interface GeneratorState {
+  kernel: KernelKind;
   routeMode: RouteMode;
   selectedIds: string[];
   globalTag: string;
@@ -85,8 +92,78 @@ const CATEGORY_ICONS: Record<ServiceIcon, ReactNode> = {
   sparkles: <Sparkles size={18} strokeWidth={1.7} />,
 };
 
+interface KernelSelectorProps {
+  kernel: KernelKind;
+  onChange: (kernel: KernelKind) => void;
+}
+
+function KernelSelector({ kernel, onChange }: KernelSelectorProps) {
+  function handleKeyDown(
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    current: KernelKind,
+  ) {
+    if (
+      event.key !== "ArrowLeft" &&
+      event.key !== "ArrowRight" &&
+      event.key !== "ArrowUp" &&
+      event.key !== "ArrowDown"
+    ) {
+      return;
+    }
+    event.preventDefault();
+    const currentIndex = KERNEL_KINDS.indexOf(current);
+    const step =
+      event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+    const next =
+      KERNEL_KINDS[
+        (currentIndex + step + KERNEL_KINDS.length) % KERNEL_KINDS.length
+      ];
+    onChange(next);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`kernel-option-${next}`)?.focus();
+    });
+  }
+
+  return (
+    <div className="kernel-panel">
+      <div className="kernel-panel-top">
+        <span className="kernel-panel-label">目标内核</span>
+        <div
+          className="kernel-switch"
+          role="radiogroup"
+          aria-label="目标内核"
+        >
+          {KERNEL_KINDS.map((option) => {
+            const meta = kernelMeta[option];
+            const selected = option === kernel;
+            return (
+              <button
+                key={option}
+                type="button"
+                role="radio"
+                id={`kernel-option-${option}`}
+                aria-checked={selected}
+                tabIndex={selected ? 0 : -1}
+                className={`kernel-option ${selected ? "is-active" : ""}`}
+                onClick={() => onChange(option)}
+                onKeyDown={(event) => handleKeyDown(event, option)}
+              >
+                {meta.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <span className="kernel-panel-note">
+        {kernelMeta[kernel].description}
+      </span>
+    </div>
+  );
+}
+
 function createInitialState(): GeneratorState {
   const fallback: GeneratorState = {
+    kernel: "xray",
     routeMode: "media",
     selectedIds: [...defaultSelection],
     globalTag: "proxy",
@@ -123,7 +200,9 @@ function createInitialState(): GeneratorState {
       }),
     );
 
-    return {
+    const kernel = normalizeKernel(parsed.kernel);
+    const state: GeneratorState = {
+      kernel,
       routeMode: normalizeRouteMode(parsed.routeMode),
       selectedIds: [...new Set(selectedIds)],
       globalTag:
@@ -140,9 +219,20 @@ function createInitialState(): GeneratorState {
           ? parsed.customDomainsTag
           : "",
     };
+    return makeKernelCompatible(state);
   } catch {
     return fallback;
   }
+}
+
+function makeKernelCompatible(state: GeneratorState): GeneratorState {
+  if (state.kernel !== "singbox") return state;
+  return {
+    ...state,
+    routeMode: state.routeMode === "bypass" ? "global" : state.routeMode,
+    includeGeosite: false,
+    blockAds: false,
+  };
 }
 
 function sameIdSet(selected: readonly string[], target: readonly string[]) {
@@ -267,7 +357,7 @@ function CategoryCard({
             <label className="category-tag-field">
               <span>
                 <Route size={13} />
-                outboundTag
+                出口 tag
               </span>
               <input
                 type="text"
@@ -277,7 +367,7 @@ function CategoryCard({
                 placeholder="proxy"
                 spellCheck={false}
                 autoComplete="off"
-                aria-label={`${category.name}的 outboundTag`}
+                aria-label={`${category.name}的出口 tag`}
                 aria-invalid={tagInvalid}
                 list="xboard-outbound-tags"
               />
@@ -334,6 +424,7 @@ function CategoryCard({
 }
 
 interface SettingsCardProps {
+  kernel: KernelKind;
   globalTag: string;
   perCategory: boolean;
   includeGeosite: boolean;
@@ -349,6 +440,7 @@ interface SettingsCardProps {
 }
 
 function SettingsCard({
+  kernel,
   globalTag,
   perCategory,
   includeGeosite,
@@ -363,6 +455,8 @@ function SettingsCard({
   onBlockTorrentChange,
 }: SettingsCardProps) {
   const invalid = requiresGlobalTag && !isValidTag(globalTag);
+  const singbox = kernel === "singbox";
+  const routeFieldName = singbox ? "outbound" : "outboundTag";
 
   return (
     <section className="settings-card">
@@ -378,7 +472,7 @@ function SettingsCard({
         <label className="tag-field">
           <span className="field-label">
             <Route size={13} />
-            outboundTag
+            {routeFieldName}
           </span>
           <span className={`tag-input-shell ${invalid ? "is-invalid" : ""}`}>
             <span className="tag-prefix">→</span>
@@ -427,10 +521,11 @@ function SettingsCard({
       </div>
 
       <div className="advanced-options">
-        <label className="check-option">
+        <label className={`check-option ${singbox ? "is-disabled" : ""}`}>
           <input
             type="checkbox"
             checked={includeGeosite}
+            disabled={singbox}
             onChange={(event) => onIncludeGeositeChange(event.target.checked)}
           />
           <span className="check-option-box" aria-hidden="true">
@@ -445,14 +540,19 @@ function SettingsCard({
                 aria-label="需要节点包含 geosite.dat；默认使用显式域名。"
               />
             </span>
-            <small>需要节点具备 geosite 数据</small>
+            <small>
+              {singbox
+                ? "sing-box 需使用 rule_set，切回 Xray 可用"
+                : "需要节点具备 geosite 数据"}
+            </small>
           </span>
         </label>
 
-        <label className="check-option">
+        <label className={`check-option ${singbox ? "is-disabled" : ""}`}>
           <input
             type="checkbox"
             checked={blockAds}
+            disabled={singbox}
             onChange={(event) => onBlockAdsChange(event.target.checked)}
           />
           <span className="check-option-box" aria-hidden="true">
@@ -460,7 +560,11 @@ function SettingsCard({
           </span>
           <span className="check-option-copy">
             <span>阻止广告</span>
-            <small>geosite:category-ads-all → block</small>
+            <small>
+              {singbox
+                ? "需 sing-box rule_set；请使用 Xray"
+                : "geosite:category-ads-all → block"}
+            </small>
           </span>
         </label>
 
@@ -535,7 +639,7 @@ function CustomDomainsCard({
               每个域名一行
             </label>
             <label className="mini-tag-field">
-              <span>outboundTag</span>
+              <span>出口 tag</span>
               <input
                 type="text"
                 value={tag}
@@ -595,7 +699,7 @@ const ROUTE_MODE_OPTIONS: Array<{
     id: "global",
     label: "全局代理",
     badge: "全量",
-    description: "局域网直连，其余 TCP/UDP 流量交给全局 outboundTag。",
+    description: "局域网直连，其余 TCP/UDP 流量交给全局出口标签。",
     icon: <Globe2 size={17} strokeWidth={1.8} />,
   },
   {
@@ -615,16 +719,22 @@ const ROUTE_MODE_OPTIONS: Array<{
 ];
 
 interface RouteModeCardProps {
+  kernel: KernelKind;
   mode: RouteMode;
   onChange: (mode: RouteMode) => void;
 }
 
-function RouteModeCard({ mode, onChange }: RouteModeCardProps) {
+function RouteModeCard({ kernel, mode, onChange }: RouteModeCardProps) {
   const activeOption =
     ROUTE_MODE_OPTIONS.find((option) => option.id === mode) ??
     ROUTE_MODE_OPTIONS[0];
+  const isDisabled = (option: RouteMode) =>
+    kernel === "singbox" && option === "bypass";
+  const allTrafficNetwork =
+    kernel === "singbox" ? '["tcp", "udp"]' : '"tcp,udp"';
 
   function selectMode(nextMode: RouteMode) {
+    if (isDisabled(nextMode)) return;
     onChange(nextMode);
     window.requestAnimationFrame(() => {
       document.getElementById(`route-mode-${nextMode}`)?.focus();
@@ -656,7 +766,17 @@ function RouteModeCard({ mode, onChange }: RouteModeCardProps) {
     } else {
       nextIndex = (index + 1) % ROUTE_MODE_OPTIONS.length;
     }
-    selectMode(ROUTE_MODE_OPTIONS[nextIndex].id);
+    let attempts = 0;
+    while (
+      isDisabled(ROUTE_MODE_OPTIONS[nextIndex].id) &&
+      attempts < ROUTE_MODE_OPTIONS.length
+    ) {
+      nextIndex = (nextIndex + 1) % ROUTE_MODE_OPTIONS.length;
+      attempts += 1;
+    }
+    if (!isDisabled(ROUTE_MODE_OPTIONS[nextIndex].id)) {
+      selectMode(ROUTE_MODE_OPTIONS[nextIndex].id);
+    }
   }
 
   return (
@@ -684,6 +804,7 @@ function RouteModeCard({ mode, onChange }: RouteModeCardProps) {
       >
         {ROUTE_MODE_OPTIONS.map((option, index) => {
           const selected = option.id === mode;
+          const disabled = isDisabled(option.id);
           return (
             <button
               type="button"
@@ -691,8 +812,12 @@ function RouteModeCard({ mode, onChange }: RouteModeCardProps) {
               id={`route-mode-${option.id}`}
               key={option.id}
               aria-checked={selected}
+              aria-disabled={disabled}
+              disabled={disabled}
               tabIndex={selected ? 0 : -1}
-              className={`route-mode-option ${selected ? "is-active" : ""}`}
+              className={`route-mode-option ${selected ? "is-active" : ""} ${
+                disabled ? "is-disabled" : ""
+              }`}
               onClick={() => selectMode(option.id)}
               onKeyDown={(event) => handleModeKeyDown(event, index)}
             >
@@ -701,6 +826,9 @@ function RouteModeCard({ mode, onChange }: RouteModeCardProps) {
                 <span className="route-mode-title">
                   <strong>{option.label}</strong>
                   <span className="route-mode-badge">{option.badge}</span>
+                  {disabled ? (
+                    <span className="route-mode-badge">Xray only</span>
+                  ) : null}
                 </span>
                 <small>{option.description}</small>
               </span>
@@ -718,17 +846,17 @@ function RouteModeCard({ mode, onChange }: RouteModeCardProps) {
           <p>不会添加兜底规则；未命中的流量仍由节点的默认路由处理。</p>
         ) : mode === "global" ? (
           <p>
-            会先放行私有网段，再添加 <code>network: "tcp,udp"</code>{" "}
-            的代理兜底规则，其余流量交给全局 outboundTag。
+            会先放行私有网段，再添加 <code>network: {allTrafficNetwork}</code>{" "}
+            的代理兜底规则，其余流量交给全局出口标签。
           </p>
         ) : mode === "bypass" ? (
           <p>
             会先放行私有网段、<code>geosite:cn</code> 与{" "}
-            <code>geoip:cn</code>，其余流量再交给全局 outboundTag。
+            <code>geoip:cn</code>，其余流量再交给全局出口标签。
           </p>
         ) : (
           <p>
-            末尾会添加一条 <code>network: "tcp,udp"</code>{" "}
+            末尾会添加一条 <code>network: {allTrafficNetwork}</code>{" "}
             的直连兜底规则；所选平台和自定义域名仍优先匹配。
           </p>
         )}
@@ -750,7 +878,7 @@ export function RouteGenerator() {
     drafts: outboundDrafts,
     setDrafts: setOutboundDrafts,
     result: outboundResult,
-  } = useOutboundsBuilder();
+  } = useOutboundsBuilder(config.kernel);
 
   useEffect(() => {
     try {
@@ -818,6 +946,7 @@ export function RouteGenerator() {
   const result = useMemo(
     () =>
       generateRoutes({
+        kernel: config.kernel,
         routeMode: config.routeMode,
         selectedIds,
         globalTag: config.globalTag,
@@ -874,6 +1003,12 @@ export function RouteGenerator() {
 
   function updateConfig(patch: Partial<GeneratorState>) {
     setConfig((previous) => ({ ...previous, ...patch }));
+  }
+
+  function changeKernel(kernel: KernelKind) {
+    setConfig((previous) =>
+      makeKernelCompatible({ ...previous, kernel }),
+    );
   }
 
   function toggleService(id: string) {
@@ -1017,10 +1152,16 @@ export function RouteGenerator() {
               </span>
             </button>
           </div>
-          <span className="builder-switch-note">
-            <ShieldCheck size={13} />
-            本地生成 · 自动保存
-          </span>
+          <div className="builder-config-side">
+            <KernelSelector
+              kernel={config.kernel}
+              onChange={changeKernel}
+            />
+            <span className="builder-switch-note">
+              <ShieldCheck size={13} />
+              本地生成 · 自动保存
+            </span>
+          </div>
         </div>
 
         <datalist id="xboard-outbound-tags">
@@ -1056,6 +1197,7 @@ export function RouteGenerator() {
             </div>
 
             <RouteModeCard
+              kernel={config.kernel}
               mode={config.routeMode}
               onChange={(routeMode) => updateConfig({ routeMode })}
             />
@@ -1133,6 +1275,7 @@ export function RouteGenerator() {
         <div className="generator-grid">
           <div className="generator-column">
             <SettingsCard
+              kernel={config.kernel}
               globalTag={config.globalTag}
               perCategory={config.perCategory}
               includeGeosite={config.includeGeosite}
@@ -1226,6 +1369,7 @@ export function RouteGenerator() {
           <div className="output-column">
             <OutputPanel
               result={result}
+              kernel={config.kernel}
               onLoadPopular={() => applyPreset(popularServiceIds)}
             />
           </div>
@@ -1242,6 +1386,7 @@ export function RouteGenerator() {
             drafts={outboundDrafts}
             onChange={setOutboundDrafts}
             result={outboundResult}
+            kernel={config.kernel}
           />
         </div>
       </div>

@@ -62,7 +62,7 @@ function HeroPreview() {
 
           <div className="config-field-label">
             <span>自定义 Routes (JSON)</span>
-            <span className="config-format">Xboard Node</span>
+            <span className="config-format">Xray / sing-box</span>
           </div>
 
           <div className="hero-code-shell">
@@ -131,7 +131,8 @@ export function Hero() {
 
           <p className="hero-subtitle">
             勾选流媒体平台，或直接启用全局代理、绕过大陆等接管模式，一次生成可粘贴到
-            Xboard 高级协议配置的 Routes 与 Outbounds JSON。
+            Xboard 高级协议配置的 Routes 与 Outbounds JSON，支持 Xray 与
+            sing-box 双内核。
           </p>
 
           <div className="hero-actions">
@@ -172,8 +173,8 @@ export function Hero() {
             </div>
             <div className="hero-stat-separator" />
             <div className="hero-stat">
-              <strong>Xray</strong>
-              <span>原生 JSON</span>
+              <strong>2×</strong>
+              <span>Xray / sing-box</span>
             </div>
           </div>
         </div>

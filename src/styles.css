@@ -1214,6 +1214,82 @@ code {
   font-size: 8.5px;
 }
 
+.builder-config-side {
+  display: flex;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 7px;
+  flex: none;
+}
+
+.kernel-panel {
+  display: flex;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.kernel-panel-top {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.kernel-panel-label {
+  color: var(--fg-quiet);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.kernel-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+}
+
+.kernel-option {
+  height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-tertiary);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.kernel-option:hover {
+  color: var(--fg);
+}
+
+.kernel-option.is-active {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.kernel-option:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.kernel-panel-note {
+  color: var(--fg-tertiary);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  line-height: 1.4;
+  text-align: right;
+}
+
 .builder-view:not([hidden]) {
   animation: builder-view-in 220ms ease both;
 }
@@ -1314,6 +1390,15 @@ code {
   border-color: var(--border-strong);
   background: var(--panel);
   color: var(--fg);
+}
+
+.route-mode-option.is-disabled,
+.route-mode-option.is-disabled:hover {
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--fg-quiet);
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .route-mode-option.is-active {
@@ -1868,6 +1953,11 @@ code {
   gap: 8px;
   cursor: pointer;
   user-select: none;
+}
+
+.check-option.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .check-option input {
@@ -4016,6 +4106,22 @@ code {
     min-width: 0;
     height: 47px;
     gap: 8px;
+  }
+
+  .builder-config-side {
+    align-items: stretch;
+  }
+
+  .kernel-panel {
+    align-items: stretch;
+  }
+
+  .kernel-panel-top {
+    justify-content: space-between;
+  }
+
+  .kernel-panel-note {
+    text-align: left;
   }
 
   .builder-switch-note {

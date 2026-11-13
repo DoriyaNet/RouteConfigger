@@ -226,6 +226,136 @@ describe("generateOutbounds protocol settings", () => {
   });
 });
 
+describe("sing-box outbounds", () => {
+  it("uses flat settings for every supported protocol", () => {
+    const result = generateOutbounds(
+      [
+        draft("socks", {
+          username: "socks-user",
+          password: "{{SECRET_x3v8m2qk}}",
+        }),
+        draft("http", {
+          username: "http-user",
+          password: "http-pass",
+        }),
+        draft("shadowsocks", {
+          method: "chacha20-ietf-poly1305",
+          password: "ss-pass",
+        }),
+        draft("trojan", {
+          password: "trojan-pass",
+        }),
+        draft("vmess", {
+          uuid: "vmess-uuid",
+          alterId: "0",
+          security: "auto",
+        }),
+        draft("vless", {
+          uuid: "vless-uuid",
+          flow: "xtls-rprx-vision",
+        }),
+        wireGuardDraft({
+          preSharedKey: "pre-shared",
+          reserved: "1, 2, 3",
+          domainStrategy: "ForceIPv4",
+        }),
+      ],
+      "singbox",
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.kernel).toBe("singbox");
+    expect(result.outbounds[0].settings).toEqual({
+      server: "proxy.example.com",
+      server_port: 1080,
+      version: "5",
+      username: "socks-user",
+      password: "{{SECRET_x3v8m2qk}}",
+    });
+    expect(result.outbounds[1].settings).toEqual({
+      server: "proxy.example.com",
+      server_port: 1080,
+      username: "http-user",
+      password: "http-pass",
+    });
+    expect(result.outbounds[2].settings).toEqual({
+      server: "proxy.example.com",
+      server_port: 1080,
+      method: "chacha20-ietf-poly1305",
+      password: "ss-pass",
+    });
+    expect(result.outbounds[3].settings).toEqual({
+      server: "proxy.example.com",
+      server_port: 1080,
+      password: "trojan-pass",
+    });
+    expect(result.outbounds[4].settings).toEqual({
+      server: "proxy.example.com",
+      server_port: 1080,
+      uuid: "vmess-uuid",
+      security: "auto",
+      alter_id: 0,
+    });
+    expect(result.outbounds[5].settings).toEqual({
+      server: "proxy.example.com",
+      server_port: 1080,
+      uuid: "vless-uuid",
+      flow: "xtls-rprx-vision",
+    });
+    expect(result.outbounds[6].settings).toMatchObject({
+      private_key: "private-key",
+      local_address: ["172.16.0.2/32"],
+      peers: [
+        {
+          address: "engage.cloudflareclient.com",
+          port: 2408,
+          public_key: WARP_PUBLIC_KEY,
+          pre_shared_key: "pre-shared",
+          allowed_ips: ["0.0.0.0/0", "::/0"],
+        },
+      ],
+      reserved: [1, 2, 3],
+      domain_strategy: "ipv4_only",
+    });
+    expect(result.outbounds[0].settings).not.toHaveProperty("servers");
+  });
+
+  it("maps chains to the sing-box detour dial field", () => {
+    const result = generateOutbounds(
+      [
+        draft("socks", { tag: "front", proxyTag: "back" }),
+        draft("http", { tag: "back" }),
+      ],
+      "singbox",
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.outbounds[0].settings).toMatchObject({ detour: "back" });
+    expect(result.outbounds[0]).not.toHaveProperty("proxy_tag");
+  });
+
+  it("allows extra settings to add sing-box TLS and transport fields", () => {
+    const result = generateOutbounds(
+      [
+        draft("vless", {
+          uuid: "vless-uuid",
+          extraSettings: JSON.stringify({
+            tls: { enabled: true, server_name: "example.com" },
+            transport: { type: "ws", path: "/ws" },
+          }),
+        }),
+      ],
+      "singbox",
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.outbounds[0].settings).toMatchObject({
+      tls: { enabled: true, server_name: "example.com" },
+      transport: { type: "ws", path: "/ws" },
+    });
+  });
+});
+
 describe("createOutboundDraft", () => {
   it("creates Cloudflare WARP defaults for WireGuard", () => {
     const created = createOutboundDraft("wireguard");

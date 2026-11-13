@@ -6,6 +6,10 @@ import {
   type OutboundDraft,
   type OutboundProtocol,
 } from "../lib/outbounds";
+import {
+  DEFAULT_KERNEL,
+  type KernelKind,
+} from "../lib/kernel";
 
 const STORAGE_KEY = ["xroute", "outbounds", "state", "v1"].join("-");
 const protocols = new Set(Object.keys(outboundProtocolMeta));
@@ -61,9 +65,12 @@ function loadDrafts(): OutboundDraft[] {
   }
 }
 
-export function useOutboundsBuilder() {
+export function useOutboundsBuilder(kernel: KernelKind = DEFAULT_KERNEL) {
   const [drafts, setDrafts] = useState<OutboundDraft[]>(loadDrafts);
-  const result = useMemo(() => generateOutbounds(drafts), [drafts]);
+  const result = useMemo(
+    () => generateOutbounds(drafts, kernel),
+    [drafts, kernel],
+  );
 
   useEffect(() => {
     try {

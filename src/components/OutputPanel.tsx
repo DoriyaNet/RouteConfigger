@@ -1,10 +1,12 @@
 import { Info } from "lucide-react";
+import { kernelMeta, type KernelKind } from "../lib/kernel";
 import type { GenerationResult } from "../lib/routes";
 import { formatBytes } from "../lib/routes";
 import { JsonOutputPanel } from "./JsonOutputPanel";
 
 interface OutputPanelProps {
   result: GenerationResult;
+  kernel: KernelKind;
   onLoadPopular: () => void;
 }
 
@@ -15,7 +17,11 @@ const MODE_LABELS: Record<GenerationResult["mode"], string> = {
   direct: "全局直连",
 };
 
-export function OutputPanel({ result, onLoadPopular }: OutputPanelProps) {
+export function OutputPanel({
+  result,
+  kernel,
+  onLoadPopular,
+}: OutputPanelProps) {
   const hasErrors = result.errors.length > 0;
   const isEmpty = result.ruleCount === 0;
   const canExport = !hasErrors && !isEmpty;
@@ -27,7 +33,7 @@ export function OutputPanel({ result, onLoadPopular }: OutputPanelProps) {
       panelLabel="生成的 Routes 配置"
       kicker="GENERATED OUTPUT"
       title="自定义 Routes"
-      targetLabel="Xboard Node"
+      targetLabel={`Xboard Node / ${kernelMeta[kernel].label}`}
       status={status}
       statusLabel={statusLabel}
       stats={[
@@ -46,14 +52,28 @@ export function OutputPanel({ result, onLoadPopular }: OutputPanelProps) {
         actionLabel: "载入热门预设",
         onAction: onLoadPopular,
       }}
-      downloadName="xboard-custom-routes.json"
+      downloadName={`xboard-custom-routes-${kernel}.json`}
       note={
         <>
           <Info size={14} />
           <p>
-            粘贴到{" "}
-            <strong>Xboard → 节点 → 高级协议配置 → 自定义 Routes</strong>
-            ，并确保 <code>outboundTag</code> 与自定义 Outbounds 的 tag 一致。
+            {kernel === "xray" ? (
+              <>
+                粘贴到{" "}
+                <strong>Xboard → 节点 → 高级协议配置 → 自定义 Routes</strong>
+                ，并确保 <code>outboundTag</code> 与自定义 Outbounds 的 tag
+                一致。
+              </>
+            ) : (
+              <>
+                粘贴到{" "}
+                <strong>Xboard → 节点 → 高级协议配置 → 自定义 Routes</strong>
+                。输出为 sing-box <code>route.rules</code>，使用{" "}
+                <code>action</code> / <code>outbound</code> /{" "}
+                <code>domain_suffix</code> / <code>ip_cidr</code>；{" "}
+                <code>outbound</code> 必须与自定义 Outbounds 的 tag 一致。
+              </>
+            )}
             {result.mode !== "media"
               ? ` 当前「${MODE_LABELS[result.mode]}」模式已添加接管剩余 TCP/UDP 流量的兜底规则。`
               : ""}

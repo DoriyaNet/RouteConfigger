@@ -1,4 +1,9 @@
 import { isValidTag } from "./routes";
+import {
+  DEFAULT_KERNEL,
+  normalizeKernel,
+  type KernelKind,
+} from "./kernel";
 
 export { isValidTag };
 
@@ -43,6 +48,7 @@ export interface XboardOutbound {
 }
 
 export interface OutboundGenerationResult {
+  kernel: KernelKind;
   outbounds: XboardOutbound[];
   json: string;
   outboundCount: number;
@@ -71,15 +77,18 @@ export const outboundProtocolMeta: Record<
   },
   trojan: {
     label: "Trojan",
-    description: "Trojan 密码出口；TLS 需使用节点原生配置。",
+    description:
+      "Trojan 密码出口；TLS 可由 sing-box 额外 Settings 或 Xray 原生配置提供。",
   },
   vmess: {
     label: "VMess",
-    description: "VMess 出口；TLS / transport 需使用节点原生配置。",
+    description:
+      "VMess 出口；TLS / transport 可由 sing-box 额外 Settings 或 Xray 原生配置提供。",
   },
   vless: {
     label: "VLESS",
-    description: "VLESS 出口；TLS / transport 需使用节点原生配置。",
+    description:
+      "VLESS 出口；TLS / transport 可由 sing-box 额外 Settings 或 Xray 原生配置提供。",
   },
   wireguard: {
     label: "WireGuard",
@@ -307,7 +316,7 @@ function validateNodeSettings(
   return null;
 }
 
-function buildSettings(
+function buildXraySettings(
   draft: OutboundDraft,
   server: string,
   port: number,
@@ -407,6 +416,112 @@ function buildSettings(
   }
 }
 
+function buildSingboxSettings(
+  draft: OutboundDraft,
+  server: string,
+  port: number,
+): Record<string, unknown> {
+  switch (draft.protocol) {
+    case "socks": {
+      const settings: Record<string, unknown> = {
+        server,
+        server_port: port,
+        version: "5",
+      };
+      if (draft.username.trim() || draft.password.trim()) {
+        settings.username = draft.username;
+        settings.password = draft.password;
+      }
+      return settings;
+    }
+    case "http": {
+      const settings: Record<string, unknown> = {
+        server,
+        server_port: port,
+      };
+      if (draft.username.trim() || draft.password.trim()) {
+        settings.username = draft.username;
+        settings.password = draft.password;
+      }
+      return settings;
+    }
+    case "shadowsocks":
+      return {
+        server,
+        server_port: port,
+        method: draft.method.trim() || DEFAULT_SS_METHOD,
+        password: draft.password,
+      };
+    case "trojan":
+      return {
+        server,
+        server_port: port,
+        password: draft.password,
+      };
+    case "vmess":
+      return {
+        server,
+        server_port: port,
+        uuid: draft.uuid.trim(),
+        security: draft.security.trim() || "auto",
+        alter_id: parseAlterId(draft.alterId) ?? 0,
+      };
+    case "vless": {
+      const settings: Record<string, unknown> = {
+        server,
+        server_port: port,
+        uuid: draft.uuid.trim(),
+      };
+      const flow = draft.flow.trim();
+      if (flow) settings.flow = flow;
+      return settings;
+    }
+    case "wireguard": {
+      const peer: Record<string, unknown> = {
+        address: server,
+        port,
+        public_key: draft.peerPublicKey.trim(),
+        allowed_ips: ["0.0.0.0/0", "::/0"],
+      };
+      const preSharedKey = draft.preSharedKey.trim();
+      if (preSharedKey) peer.pre_shared_key = preSharedKey;
+
+      const settings: Record<string, unknown> = {
+        private_key: draft.privateKey.trim(),
+        local_address: localAddresses(draft.localAddress),
+        peers: [peer],
+        mtu: parseMtu(draft.mtu) ?? DEFAULT_WG_MTU,
+      };
+      const reserved = parseReserved(draft.reserved).values;
+      if (reserved.length > 0) settings.reserved = reserved;
+      const domainStrategy = draft.domainStrategy.trim();
+      const singboxStrategy: Record<string, string> = {
+        ForceIPv4: "ipv4_only",
+        ForceIPv6: "ipv6_only",
+        ipv4_only: "ipv4_only",
+        ipv6_only: "ipv6_only",
+        prefer_ipv4: "prefer_ipv4",
+        prefer_ipv6: "prefer_ipv6",
+      };
+      if (singboxStrategy[domainStrategy]) {
+        settings.domain_strategy = singboxStrategy[domainStrategy];
+      }
+      return settings;
+    }
+  }
+}
+
+function buildSettings(
+  draft: OutboundDraft,
+  server: string,
+  port: number,
+  kernel: KernelKind,
+): Record<string, unknown> {
+  return kernel === "xray"
+    ? buildXraySettings(draft, server, port)
+    : buildSingboxSettings(draft, server, port);
+}
+
 interface GeneratedEntry {
   outbound: XboardOutbound;
   tagKey: string;
@@ -467,7 +582,10 @@ function detectChainCycles(
 
 export function generateOutbounds(
   drafts: OutboundDraft[],
+  targetKernel: KernelKind = DEFAULT_KERNEL,
 ): OutboundGenerationResult {
+  const kernel = normalizeKernel(targetKernel);
+  const chainField = kernel === "xray" ? "proxy_tag" : "detour";
   const errors: string[] = [];
   const warnings: string[] = [];
   const entries: GeneratedEntry[] = [];
@@ -520,7 +638,7 @@ export function generateOutbounds(
     const proxyTag = draft.proxyTag.trim();
     if (proxyTag) {
       if (tag && proxyTag.toLowerCase() === tagKey) {
-        errors.push(`${label} 的 proxy_tag 不能引用自身。`);
+        errors.push(`${label} 的 ${chainField} 不能引用自身。`);
         valid = false;
       }
 
@@ -531,7 +649,7 @@ export function generateOutbounds(
         !RESERVED_TAGS.has(proxyKey)
       ) {
         warnings.push(
-          `${label} 的 proxy_tag「${proxyTag}」不在当前 Outbounds 列表中，将按节点已有的静态 outbound 处理；请确认 tag 拼写。`,
+          `${label} 的 ${chainField}「${proxyTag}」不在当前 Outbounds 列表中，将按节点已有的静态 outbound 处理；请确认 tag 拼写。`,
         );
       }
     }
@@ -623,10 +741,13 @@ export function generateOutbounds(
 
     if (!valid || port === null) continue;
 
-    const generated = buildSettings(draft, server, port);
-    const settings = extraSettings
+    const generated = buildSettings(draft, server, port, kernel);
+    let settings = extraSettings
       ? deepMerge(generated, extraSettings)
       : generated;
+    if (kernel === "singbox" && proxyTag) {
+      settings = { ...settings, detour: proxyTag };
+    }
     const settingsError = validateNodeSettings(settings);
     if (settingsError) {
       errors.push(`${label} 的 ${settingsError}`);
@@ -637,7 +758,7 @@ export function generateOutbounds(
       protocol: draft.protocol,
       settings,
     };
-    if (proxyTag) outbound.proxy_tag = proxyTag;
+    if (proxyTag && kernel === "xray") outbound.proxy_tag = proxyTag;
     entries.push({ outbound, tagKey, proxyTag });
   }
 
@@ -649,7 +770,7 @@ export function generateOutbounds(
     const proxyKey = entry.proxyTag.toLowerCase();
     if (knownTags.has(proxyKey) && !emittedTags.has(proxyKey)) {
       errors.push(
-        `「${entry.outbound.tag}」的 proxy_tag 指向了未通过校验的 Outbound「${entry.proxyTag}」。`,
+        `「${entry.outbound.tag}」的 ${chainField} 指向了未通过校验的 Outbound「${entry.proxyTag}」。`,
       );
     }
   }
@@ -659,6 +780,7 @@ export function generateOutbounds(
   const outbounds = entries.map((entry) => entry.outbound);
   const json = JSON.stringify(outbounds, null, 2);
   return {
+    kernel,
     outbounds,
     json,
     outboundCount: outbounds.length,

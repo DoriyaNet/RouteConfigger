@@ -5,6 +5,9 @@ import {
   normalizeRouteMode,
   parseCustomDomains,
   type GenerationInput,
+  type GenerationResult,
+  type SingboxRouteRule,
+  type XrayRouteRule,
 } from "./routes";
 
 const baseInput: GenerationInput = {
@@ -24,6 +27,14 @@ function uniqueExplicitDomainCount(ids: string[]): number {
   return new Set(
     ids.flatMap((id) => serviceById.get(id)?.domains ?? []),
   ).size;
+}
+
+function xrayRules(result: GenerationResult): XrayRouteRule[] {
+  return result.rules as XrayRouteRule[];
+}
+
+function singboxRules(result: GenerationResult): SingboxRouteRule[] {
+  return result.rules as SingboxRouteRule[];
 }
 
 describe("generateRoutes", () => {
@@ -75,7 +86,7 @@ describe("generateRoutes", () => {
     });
 
     expect(result.errors).toEqual([]);
-    expect(result.rules.map((rule) => rule.outboundTag)).toEqual([
+    expect(xrayRules(result).map((rule) => rule.outboundTag)).toEqual([
       "unlock-global",
       "unlock-hk",
     ]);
@@ -272,7 +283,7 @@ describe("generateRoutes", () => {
     });
 
     expect(result.errors).toEqual([]);
-    const customRule = result.rules.find(
+    const customRule = xrayRules(result).find(
       (rule) => rule.outboundTag === "custom-out",
     );
     expect(customRule?.domain).toEqual([
@@ -290,6 +301,127 @@ describe("normalizeRouteMode", () => {
     expect(normalizeRouteMode("direct")).toBe("direct");
     expect(normalizeRouteMode("unknown")).toBe("media");
     expect(normalizeRouteMode(undefined)).toBe("media");
+  });
+});
+
+describe("sing-box routes", () => {
+  it("emits action/outbound and native domain fields", () => {
+    const result = generateRoutes({
+      ...baseInput,
+      kernel: "singbox",
+      selectedIds: new Set(["netflix"]),
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.kernel).toBe("singbox");
+    const [rule] = singboxRules(result);
+    expect(rule).toMatchObject({
+      action: "route",
+      outbound: "proxy",
+    });
+    expect(rule.domain_suffix).toContain("netflix.com");
+    expect(rule).not.toHaveProperty("type");
+    expect(rule).not.toHaveProperty("outboundTag");
+  });
+
+  it("converts full, domain, and regexp prefixes", () => {
+    const result = generateRoutes({
+      ...baseInput,
+      kernel: "singbox",
+      customDomains:
+        "full:exact.example.com\ndomain:suffix.example.com\nregexp:^ads\\..+",
+      customDomainsTag: "custom-out",
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(singboxRules(result)[0]).toEqual({
+      action: "route",
+      outbound: "custom-out",
+      domain: ["exact.example.com"],
+      domain_suffix: ["suffix.example.com"],
+      domain_regex: ["^ads\\..+"],
+    });
+  });
+
+  it("uses ip_cidr and an array network for takeover modes", () => {
+    const global = generateRoutes({
+      ...baseInput,
+      kernel: "singbox",
+      routeMode: "global",
+    });
+    expect(global.errors).toEqual([]);
+    expect(singboxRules(global)[0]).toMatchObject({
+      action: "route",
+      outbound: "direct",
+      ip_cidr: expect.arrayContaining([
+        "10.0.0.0/8",
+        "192.168.0.0/16",
+        "::1/128",
+      ]),
+    });
+    expect(singboxRules(global)[1]).toEqual({
+      action: "route",
+      outbound: "proxy",
+      network: ["tcp", "udp"],
+    });
+
+    const direct = generateRoutes({
+      ...baseInput,
+      kernel: "singbox",
+      routeMode: "direct",
+    });
+    expect(singboxRules(direct)).toEqual([
+      {
+        action: "route",
+        outbound: "direct",
+        network: ["tcp", "udp"],
+      },
+    ]);
+  });
+
+  it("rejects torrent traffic with the native action", () => {
+    const result = generateRoutes({
+      ...baseInput,
+      kernel: "singbox",
+      blockTorrent: true,
+    });
+
+    expect(singboxRules(result)).toEqual([
+      { action: "sniff" },
+      {
+        action: "reject",
+        protocol: ["bittorrent"],
+      },
+    ]);
+  });
+
+  it("skips geosite entries with a warning", () => {
+    const result = generateRoutes({
+      ...baseInput,
+      kernel: "singbox",
+      selectedIds: new Set(["netflix"]),
+      includeGeosite: true,
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings.join(" ")).toContain("geosite");
+    expect(JSON.stringify(result.rules)).not.toContain("geosite:");
+  });
+
+  it("reports features that need sing-box rule_set", () => {
+    const bypass = generateRoutes({
+      ...baseInput,
+      kernel: "singbox",
+      routeMode: "bypass",
+    });
+    const ads = generateRoutes({
+      ...baseInput,
+      kernel: "singbox",
+      blockAds: true,
+    });
+
+    expect(bypass.errors.join(" ")).toContain("rule_set");
+    expect(ads.errors.join(" ")).toContain("category-ads-all");
   });
 });
 

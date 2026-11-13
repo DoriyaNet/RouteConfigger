@@ -30,8 +30,8 @@ const steps = [
     icon: ClipboardPaste,
     title: "粘贴到高级协议配置",
     description:
-      "在 Xboard 节点的高级协议配置中，分别打开「自定义 Routes」与「自定义 Outbounds」粘贴并保存。",
-    detail: "节点 → 高级协议配置 → Routes / Outbounds",
+      "先选择与节点一致的 Xray 或 sing-box 内核，再分别打开「自定义 Routes」与「自定义 Outbounds」粘贴保存。",
+    detail: "先选内核 · 再粘贴 Routes / Outbounds",
   },
 ];
 
@@ -45,7 +45,8 @@ export function HowItWorks() {
             <h2>三步完成节点配置</h2>
             <p>
               生成结果可直接作为 Xboard Node 的 <code>custom_routes</code> 与{" "}
-              <code>custom_outbounds</code> 使用，不需要额外的外层包装。
+              <code>custom_outbounds</code> 使用。输出会跟随所选内核切换为
+              Xray 或 sing-box 原生字段。
             </p>
           </div>
         </div>
@@ -90,12 +91,11 @@ export function HowItWorks() {
             <CheckCircle2 size={20} strokeWidth={1.8} />
           </span>
           <div className="fit-note-copy">
-            <h3>为 Xboard Node 的 Routes 与 Outbounds 而生成</h3>
+            <h3>为 Xboard Node 双内核而生成</h3>
             <p>
-              Routes 支持 <code>domain</code>、<code>ip</code>、{" "}
-              <code>network</code> 与全局兜底规则；Outbounds 包含{" "}
-              <code>tag</code>、<code>protocol</code> 与{" "}
-              <code>settings</code>。请确认两边标签一致。
+              Xray 输出 <code>outboundTag</code> 与嵌套 settings；sing-box
+              输出 <code>action</code>、<code>outbound</code> 与平铺 settings。
+              请确认节点实际内核、两边的 tag 保持一致。
             </p>
           </div>
           <a
@@ -121,18 +121,21 @@ export function HowItWorks() {
           </article>
           <article className="faq-card">
             <span className="faq-label">OUTBOUND</span>
-            <h3>tag 与 outboundTag 如何对应？</h3>
+            <h3>tag 与路由出口如何对应？</h3>
             <p>
-              Routes 的 <code>outboundTag</code> 必须指向 Outbounds 的{" "}
-              <code>tag</code>。链式代理则通过 <code>proxy_tag</code> 继续指向下一出口。
+              Xray 使用 <code>outboundTag</code> 与 <code>proxy_tag</code>；
+              sing-box 使用 <code>outbound</code> 与{" "}
+              <code>detour</code>。两者都必须指向 Outbounds 的最终{" "}
+              <code>tag</code>。
             </p>
           </article>
           <article className="faq-card">
-            <span className="faq-label">GEOSITE</span>
-            <h3>哪些模式依赖 geosite？</h3>
+            <span className="faq-label">KERNEL</span>
+            <h3>内核应该怎么选？</h3>
             <p>
-              流媒体分流默认使用显式域名；绕过大陆、广告拦截会固定使用{" "}
-              <code>geosite</code> / <code>geoip</code>，请确认节点包含对应数据文件。
+              与 <code>/etc/xboard-node/config.yml</code> 中的{" "}
+              <code>kernel.type</code> 保持一致。绕过大陆和广告拦截依赖{" "}
+              <code>geosite</code> / <code>geoip</code>，目前仅提供 Xray 输出。
             </p>
           </article>
         </div>

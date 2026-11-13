@@ -60,7 +60,7 @@ export function Header({ theme, onToggleTheme }: HeaderProps) {
         <div className="header-actions">
           <span className="runtime-badge">
             <span className="runtime-dot" />
-            Xray
+            Dual kernel
           </span>
           <button
             className="icon-button theme-toggle"
