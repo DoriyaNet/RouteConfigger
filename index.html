@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="为 Xboard Node 生成可直接粘贴的 Xray 自定义 Routes 与 Outbounds 配置。覆盖 Netflix、Disney+、AI、Bilibili 等 55 个流媒体平台，并支持 SOCKS5、Shadowsocks、VMess、WireGuard WARP 等出口。"
+    />
+    <meta name="theme-color" content="#000000" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>XRoute — Xboard 路由与出口生成器</title>
+    <script>
+      (function () {
+        try {
+          var theme = localStorage.getItem("xroute-theme");
+          if (theme === "light" || theme === "dark") {
+            document.documentElement.dataset.theme = theme;
+            document
+              .querySelector('meta[name="theme-color"]')
+              .setAttribute("content", theme === "light" ? "#ffffff" : "#000000");
+          }
+        } catch (error) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
