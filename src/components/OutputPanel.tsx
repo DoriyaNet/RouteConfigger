@@ -8,6 +8,13 @@ interface OutputPanelProps {
   onLoadPopular: () => void;
 }
 
+const MODE_LABELS: Record<GenerationResult["mode"], string> = {
+  media: "流媒体分流",
+  global: "全局代理",
+  bypass: "绕过大陆",
+  direct: "全局直连",
+};
+
 export function OutputPanel({ result, onLoadPopular }: OutputPanelProps) {
   const hasErrors = result.errors.length > 0;
   const isEmpty = result.ruleCount === 0;
@@ -47,6 +54,9 @@ export function OutputPanel({ result, onLoadPopular }: OutputPanelProps) {
             粘贴到{" "}
             <strong>Xboard → 节点 → 高级协议配置 → 自定义 Routes</strong>
             ，并确保 <code>outboundTag</code> 与自定义 Outbounds 的 tag 一致。
+            {result.mode !== "media"
+              ? ` 当前「${MODE_LABELS[result.mode]}」模式已添加接管剩余 TCP/UDP 流量的兜底规则。`
+              : ""}
           </p>
         </>
       }

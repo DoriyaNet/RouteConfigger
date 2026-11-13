@@ -1,18 +1,33 @@
 import { categories, serviceById } from "../data/services";
 
+export const ROUTE_MODES = ["media", "global", "bypass", "direct"] as const;
+
+export type RouteMode = (typeof ROUTE_MODES)[number];
+
+export function normalizeRouteMode(value: unknown): RouteMode {
+  return typeof value === "string" &&
+    (ROUTE_MODES as readonly string[]).includes(value)
+    ? (value as RouteMode)
+    : "media";
+}
+
 export interface XrayRouteRule {
   type: "field";
   outboundTag: string;
   domain?: string[];
+  ip?: string[];
   protocol?: string[];
+  network?: string;
 }
 
 export interface GenerationInput {
+  routeMode: RouteMode;
   selectedIds: ReadonlySet<string>;
   globalTag: string;
   perCategory: boolean;
   categoryTags: Readonly<Record<string, string>>;
   includeGeosite: boolean;
+  blockAds: boolean;
   blockTorrent: boolean;
   customDomains: string;
   customDomainsTag: string;
@@ -24,6 +39,7 @@ export interface ParsedCustomDomains {
 }
 
 export interface GenerationResult {
+  mode: RouteMode;
   rules: XrayRouteRule[];
   json: string;
   ruleCount: number;
@@ -41,6 +57,20 @@ const DOMAIN_PATTERN = new RegExp(
   `^(?=.{1,253}$)(?:${DOMAIN_LABEL}\\.)+${DOMAIN_LABEL}\\.?$`,
   "i",
 );
+
+const PRIVATE_IP_RANGES = [
+  "10.0.0.0/8",
+  "100.64.0.0/10",
+  "127.0.0.0/8",
+  "169.254.0.0/16",
+  "172.16.0.0/12",
+  "192.0.0.0/24",
+  "192.168.0.0/16",
+  "198.18.0.0/15",
+  "fc00::/7",
+  "fe80::/10",
+  "::1/128",
+];
 
 export const TAG_PATTERN = /^[^\s,{}[\]"'`]+$/;
 
@@ -124,15 +154,25 @@ function addDomains(target: string[], domains: readonly string[]) {
 }
 
 export function generateRoutes(input: GenerationInput): GenerationResult {
+  const routeMode = normalizeRouteMode(input.routeMode);
   const globalTag = normalizeTag(input.globalTag);
   const errors: string[] = [];
   const warnings: string[] = [];
   const groupedDomains = new Map<string, string[]>();
   const selectedServiceCount = input.selectedIds.size;
   const globalTagValid = isValidTag(globalTag);
+  const parsedCustom = parseCustomDomains(input.customDomains);
+  const customTag = normalizeTag(input.customDomainsTag);
+  const requiresGlobalTag =
+    routeMode === "global" ||
+    routeMode === "bypass" ||
+    (!input.perCategory && selectedServiceCount > 0) ||
+    (parsedCustom.domains.length > 0 && !customTag);
 
-  if (!input.perCategory && selectedServiceCount > 0 && !globalTagValid) {
-    errors.push("请填写有效的全局 outboundTag（不能包含空格或 JSON 特殊字符）。");
+  if (requiresGlobalTag && !globalTagValid) {
+    errors.push(
+      "请填写有效的全局 outboundTag（不能包含空格或 JSON 特殊字符）。",
+    );
   }
 
   for (const category of categories) {
@@ -161,25 +201,33 @@ export function generateRoutes(input: GenerationInput): GenerationResult {
     groupedDomains.set(tag, bucket);
   }
 
-  const parsedCustom = parseCustomDomains(input.customDomains);
   if (parsedCustom.invalid.length > 0) {
     warnings.push(
       `${parsedCustom.invalid.length} 条自定义域名格式无法识别，已跳过：${parsedCustom.invalid.join("、")}`,
     );
   }
   if (parsedCustom.domains.length > 0) {
-    const customTag =
-      normalizeTag(input.customDomainsTag) || globalTag;
-    if (!isValidTag(customTag)) {
+    const resolvedCustomTag = customTag || globalTag;
+    if (!isValidTag(resolvedCustomTag)) {
       errors.push("自定义域名规则的 outboundTag 无效。");
     } else {
-      const bucket = groupedDomains.get(customTag) ?? [];
+      const bucket = groupedDomains.get(resolvedCustomTag) ?? [];
       addDomains(bucket, parsedCustom.domains);
-      groupedDomains.set(customTag, bucket);
+      groupedDomains.set(resolvedCustomTag, bucket);
     }
   }
 
   const rules: XrayRouteRule[] = [];
+  if (input.blockAds) {
+    rules.push({
+      type: "field",
+      outboundTag: "block",
+      domain: ["geosite:category-ads-all"],
+    });
+    warnings.push(
+      "广告拦截使用 geosite:category-ads-all，请确认节点已包含 geosite.dat。",
+    );
+  }
   if (input.blockTorrent) {
     rules.push({
       type: "field",
@@ -220,8 +268,51 @@ export function generateRoutes(input: GenerationInput): GenerationResult {
     });
   }
 
+  if (
+    (routeMode === "global" || routeMode === "bypass") &&
+    globalTagValid
+  ) {
+    if (routeMode === "bypass") {
+      rules.push({
+        type: "field",
+        outboundTag: "direct",
+        domain: ["geosite:cn"],
+      });
+      rules.push({
+        type: "field",
+        outboundTag: "direct",
+        ip: [...PRIVATE_IP_RANGES, "geoip:cn"],
+      });
+    } else {
+      rules.push({
+        type: "field",
+        outboundTag: "direct",
+        ip: PRIVATE_IP_RANGES,
+      });
+    }
+    rules.push({
+      type: "field",
+      outboundTag: globalTag,
+      network: "tcp,udp",
+    });
+  }
+  if (routeMode === "direct") {
+    rules.push({
+      type: "field",
+      outboundTag: "direct",
+      network: "tcp,udp",
+    });
+  }
+
+  if (routeMode === "bypass") {
+    warnings.push(
+      "绕过大陆模式使用 geosite:cn 与 geoip:cn，请确认节点已包含 geosite.dat 与 geoip.dat；Xboard Node 使用 AsIs 域名策略，IP 规则只匹配目标为 IP 的连接。",
+    );
+  }
+
   const json = JSON.stringify(rules, null, 2);
   return {
+    mode: routeMode,
     rules,
     json,
     ruleCount: rules.length,

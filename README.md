@@ -9,6 +9,8 @@
 
 - 覆盖 55 个流媒体、AI 与地区服务，分为 7 个地区分类
 - 默认输出单条 `proxy` 规则，支持按分类配置不同的 `outboundTag`
+- 支持流媒体分流、全局代理、绕过大陆、全局直连四种流量接管方式
+- 可附加广告拦截与 BT 流量阻断规则
 - 支持 7 种 Xray 出口：SOCKS5、HTTP、Shadowsocks、Trojan、VMess、VLESS、WireGuard
 - 预置 Cloudflare WARP 参数，支持链式代理、自定义 settings、标签冲突与循环检测
 - 自动合并同标签规则、去重域名并校验 JSON
@@ -40,6 +42,19 @@
 ```text
 Xboard 面板 → 节点编辑 → 高级协议配置 → 自定义 Routes
 ```
+
+### 流量接管模式
+
+- **流媒体分流**：只输出所选平台与自定义域名规则，不添加兜底规则。
+- **全局代理**：先放行私有网段，再追加 `network: "tcp,udp"` 代理兜底规则，其余流量
+  交给全局 `outboundTag`。
+- **绕过大陆**：先放行私有网段、`geosite:cn` 与 `geoip:cn`，再追加全局代理兜底规则。
+- **全局直连**：所选平台和域名仍优先匹配，其余 TCP/UDP 流量交给 `direct`。
+
+全局代理和绕过大陆模式会在规则末尾添加接管所有 TCP/UDP 流量的规则。绕过大陆
+模式需要节点包含 `geosite.dat` 与 `geoip.dat`。Xboard Node 当前使用
+`domainStrategy: "AsIs"`，因此 `geoip` 规则只匹配目标本身是 IP 的连接；域名主要
+依靠 `geosite` 规则。
 
 ## Outbounds 生成格式
 
@@ -93,7 +108,8 @@ Xboard 面板 → 节点编辑 → 高级协议配置 → 自定义 Outbounds
 ### Outbound 标签
 
 `outboundTag` 必须与节点「自定义 Outbounds」中的 `tag` 一致。仅使用一个出口时保留
-默认值 `proxy` 即可。启用「阻止 BT 流量」时会额外生成一条指向 `block` 的规则。
+默认值 `proxy` 即可。启用「阻止广告」会添加 `geosite:category-ads-all` → `block`
+规则；启用「阻止 BT 流量」会添加 `bittorrent` → `block` 规则。
 
 Outbounds 中的 `tag` 可以直接被 Routes 的 `outboundTag` 引用；设置
 `proxy_tag` 后，该出口的流量会继续交给目标出口。生成器会检查重复、自引用、

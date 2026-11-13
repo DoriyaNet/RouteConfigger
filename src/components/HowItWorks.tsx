@@ -14,8 +14,8 @@ const steps = [
     icon: ListChecks,
     title: "编排 Routes 与 Outbounds",
     description:
-      "Routes 里勾选解锁平台，Outbounds 里添加 SOCKS5、Shadowsocks 或 WARP。两者使用同一套 tag 协作。",
-    detail: "55 个平台 · 7 种出口协议",
+      "Routes 里选择全局代理、绕过大陆，或勾选解锁平台；Outbounds 里添加 SOCKS5、Shadowsocks 或 WARP。两者使用同一套 tag 协作。",
+    detail: "4 种接管模式 · 7 种出口协议",
   },
   {
     number: "02",
@@ -92,9 +92,10 @@ export function HowItWorks() {
           <div className="fit-note-copy">
             <h3>为 Xboard Node 的 Routes 与 Outbounds 而生成</h3>
             <p>
-              Routes 包含 <code>type</code>、<code>outboundTag</code> 与{" "}
-              <code>domain</code>；Outbounds 包含 <code>tag</code>、
-              <code>protocol</code> 与 <code>settings</code>。请确认两边标签一致。
+              Routes 支持 <code>domain</code>、<code>ip</code>、{" "}
+              <code>network</code> 与全局兜底规则；Outbounds 包含{" "}
+              <code>tag</code>、<code>protocol</code> 与{" "}
+              <code>settings</code>。请确认两边标签一致。
             </p>
           </div>
           <a
@@ -128,10 +129,10 @@ export function HowItWorks() {
           </article>
           <article className="faq-card">
             <span className="faq-label">GEOSITE</span>
-            <h3>需要开启 geosite 吗？</h3>
+            <h3>哪些模式依赖 geosite？</h3>
             <p>
-              通常不需要。默认已输出显式域名，即使节点没有 geosite.dat
-              也能正常匹配。只有确认节点包含数据时才建议开启。
+              流媒体分流默认使用显式域名；绕过大陆、广告拦截会固定使用{" "}
+              <code>geosite</code> / <code>geoip</code>，请确认节点包含对应数据文件。
             </p>
           </article>
         </div>

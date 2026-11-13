@@ -2,16 +2,19 @@ import { describe, expect, it } from "vitest";
 import { allServices, categories, serviceById } from "../data/services";
 import {
   generateRoutes,
+  normalizeRouteMode,
   parseCustomDomains,
   type GenerationInput,
 } from "./routes";
 
 const baseInput: GenerationInput = {
+  routeMode: "media",
   selectedIds: new Set(),
   globalTag: "proxy",
   perCategory: false,
   categoryTags: {},
   includeGeosite: false,
+  blockAds: false,
   blockTorrent: false,
   customDomains: "",
   customDomainsTag: "",
@@ -138,6 +141,115 @@ describe("generateRoutes", () => {
     });
   });
 
+  it("directs private networks before the full-traffic proxy rule", () => {
+    const result = generateRoutes({
+      ...baseInput,
+      routeMode: "global",
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.mode).toBe("global");
+    expect(result.rules).toHaveLength(2);
+    expect(result.rules[0]).toMatchObject({
+      type: "field",
+      outboundTag: "direct",
+      ip: expect.arrayContaining([
+        "10.0.0.0/8",
+        "192.168.0.0/16",
+        "::1/128",
+      ]),
+    });
+    expect(result.rules[1]).toEqual({
+      type: "field",
+      outboundTag: "proxy",
+      network: "tcp,udp",
+    });
+  });
+
+  it("routes mainland and private traffic direct before the global fallback", () => {
+    const result = generateRoutes({
+      ...baseInput,
+      routeMode: "bypass",
+      selectedIds: new Set(["netflix"]),
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.rules).toHaveLength(4);
+    expect(result.rules[0]).toMatchObject({
+      outboundTag: "proxy",
+      domain: expect.arrayContaining(["domain:netflix.com"]),
+    });
+    expect(result.rules[1]).toEqual({
+      type: "field",
+      outboundTag: "direct",
+      domain: ["geosite:cn"],
+    });
+    expect(result.rules[2]).toMatchObject({
+      type: "field",
+      outboundTag: "direct",
+      ip: expect.arrayContaining([
+        "10.0.0.0/8",
+        "192.168.0.0/16",
+        "geoip:cn",
+      ]),
+    });
+    expect(result.rules[3]).toEqual({
+      type: "field",
+      outboundTag: "proxy",
+      network: "tcp,udp",
+    });
+    expect(result.warnings.join(" ")).toContain("geosite.dat");
+  });
+
+  it("adds a full-traffic direct rule in direct mode", () => {
+    const result = generateRoutes({
+      ...baseInput,
+      routeMode: "direct",
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.rules).toEqual([
+      {
+        type: "field",
+        outboundTag: "direct",
+        network: "tcp,udp",
+      },
+    ]);
+  });
+
+  it("prepends an optional ad block rule", () => {
+    const result = generateRoutes({
+      ...baseInput,
+      routeMode: "global",
+      blockAds: true,
+    });
+
+    expect(result.rules[0]).toEqual({
+      type: "field",
+      outboundTag: "block",
+      domain: ["geosite:category-ads-all"],
+    });
+    expect(result.rules).toHaveLength(3);
+    expect(result.rules.at(-1)).toEqual({
+      type: "field",
+      outboundTag: "proxy",
+      network: "tcp,udp",
+    });
+    expect(result.warnings.join(" ")).toContain("category-ads-all");
+  });
+
+  it("requires a valid fallback tag for takeover modes", () => {
+    const result = generateRoutes({
+      ...baseInput,
+      routeMode: "global",
+      globalTag: "not valid",
+    });
+
+    expect(result.errors.join(" ")).toContain("全局 outboundTag");
+    expect(result.rules).toEqual([]);
+    expect(result.json).toBe("[]");
+  });
+
   it("reports invalid outbound tags and does not emit broken rules", () => {
     const result = generateRoutes({
       ...baseInput,
@@ -168,6 +280,16 @@ describe("generateRoutes", () => {
       "domain:example.net",
       "domain:video.example.org",
     ]);
+  });
+});
+
+describe("normalizeRouteMode", () => {
+  it("keeps supported modes and falls back to media for legacy values", () => {
+    expect(normalizeRouteMode("global")).toBe("global");
+    expect(normalizeRouteMode("bypass")).toBe("bypass");
+    expect(normalizeRouteMode("direct")).toBe("direct");
+    expect(normalizeRouteMode("unknown")).toBe("media");
+    expect(normalizeRouteMode(undefined)).toBe("media");
   });
 });
 

@@ -130,8 +130,8 @@ export function Hero() {
           </h1>
 
           <p className="hero-subtitle">
-            勾选流媒体平台、编排代理出口，一次生成可直接粘贴到 Xboard
-            高级协议配置的 Routes 与 Outbounds JSON，不用再手写长串域名和协议参数。
+            勾选流媒体平台，或直接启用全局代理、绕过大陆等接管模式，一次生成可粘贴到
+            Xboard 高级协议配置的 Routes 与 Outbounds JSON。
           </p>
 
           <div className="hero-actions">

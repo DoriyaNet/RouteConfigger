@@ -41,7 +41,9 @@ import {
 import {
   generateRoutes,
   isValidTag,
+  normalizeRouteMode,
   parseCustomDomains,
+  type RouteMode,
 } from "../lib/routes";
 import { useOutboundsBuilder } from "../hooks/useOutboundsBuilder";
 import { OutboundsWorkspace } from "./OutboundsWorkspace";
@@ -52,11 +54,13 @@ const STORAGE_KEY = ["xroute", "generator", "state", "v1"].join("-");
 type BuilderTool = "routes" | "outbounds";
 
 interface GeneratorState {
+  routeMode: RouteMode;
   selectedIds: string[];
   globalTag: string;
   perCategory: boolean;
   categoryTags: Record<string, string>;
   includeGeosite: boolean;
+  blockAds: boolean;
   blockTorrent: boolean;
   customDomains: string;
   customDomainsTag: string;
@@ -83,11 +87,13 @@ const CATEGORY_ICONS: Record<ServiceIcon, ReactNode> = {
 
 function createInitialState(): GeneratorState {
   const fallback: GeneratorState = {
+    routeMode: "media",
     selectedIds: [...defaultSelection],
     globalTag: "proxy",
     perCategory: false,
     categoryTags: { ...DEFAULT_CATEGORY_TAGS },
     includeGeosite: false,
+    blockAds: false,
     blockTorrent: false,
     customDomains: "",
     customDomainsTag: "",
@@ -118,12 +124,14 @@ function createInitialState(): GeneratorState {
     );
 
     return {
+      routeMode: normalizeRouteMode(parsed.routeMode),
       selectedIds: [...new Set(selectedIds)],
       globalTag:
         typeof parsed.globalTag === "string" ? parsed.globalTag : "proxy",
       perCategory: Boolean(parsed.perCategory),
       categoryTags,
       includeGeosite: Boolean(parsed.includeGeosite),
+      blockAds: Boolean(parsed.blockAds),
       blockTorrent: Boolean(parsed.blockTorrent),
       customDomains:
         typeof parsed.customDomains === "string" ? parsed.customDomains : "",
@@ -329,12 +337,14 @@ interface SettingsCardProps {
   globalTag: string;
   perCategory: boolean;
   includeGeosite: boolean;
+  blockAds: boolean;
   blockTorrent: boolean;
-  hasSelection: boolean;
+  requiresGlobalTag: boolean;
   outboundTags: string[];
   onGlobalTagChange: (tag: string) => void;
   onPerCategoryChange: (value: boolean) => void;
   onIncludeGeositeChange: (value: boolean) => void;
+  onBlockAdsChange: (value: boolean) => void;
   onBlockTorrentChange: (value: boolean) => void;
 }
 
@@ -342,15 +352,17 @@ function SettingsCard({
   globalTag,
   perCategory,
   includeGeosite,
+  blockAds,
   blockTorrent,
-  hasSelection,
+  requiresGlobalTag,
   outboundTags,
   onGlobalTagChange,
   onPerCategoryChange,
   onIncludeGeositeChange,
+  onBlockAdsChange,
   onBlockTorrentChange,
 }: SettingsCardProps) {
-  const invalid = hasSelection && !perCategory && !isValidTag(globalTag);
+  const invalid = requiresGlobalTag && !isValidTag(globalTag);
 
   return (
     <section className="settings-card">
@@ -426,7 +438,7 @@ function SettingsCard({
           </span>
           <span className="check-option-copy">
             <span>
-              加入 geosite
+              加入平台 geosite
               <Info
                 className="inline-info"
                 size={12}
@@ -434,6 +446,21 @@ function SettingsCard({
               />
             </span>
             <small>需要节点具备 geosite 数据</small>
+          </span>
+        </label>
+
+        <label className="check-option">
+          <input
+            type="checkbox"
+            checked={blockAds}
+            onChange={(event) => onBlockAdsChange(event.target.checked)}
+          />
+          <span className="check-option-box" aria-hidden="true">
+            <Check size={11} strokeWidth={2.5} />
+          </span>
+          <span className="check-option-copy">
+            <span>阻止广告</span>
+            <small>geosite:category-ads-all → block</small>
           </span>
         </label>
 
@@ -550,6 +577,166 @@ function CustomDomainsCard({
   );
 }
 
+const ROUTE_MODE_OPTIONS: Array<{
+  id: RouteMode;
+  label: string;
+  badge: string;
+  description: string;
+  icon: ReactNode;
+}> = [
+  {
+    id: "media",
+    label: "流媒体分流",
+    badge: "按域名",
+    description: "只生成所选平台与自定义域名的命中规则。",
+    icon: <Clapperboard size={17} strokeWidth={1.8} />,
+  },
+  {
+    id: "global",
+    label: "全局代理",
+    badge: "全量",
+    description: "局域网直连，其余 TCP/UDP 流量交给全局 outboundTag。",
+    icon: <Globe2 size={17} strokeWidth={1.8} />,
+  },
+  {
+    id: "bypass",
+    label: "绕过大陆",
+    badge: "CN 直连",
+    description: "局域网和大陆直连，其余流量走全局出口。",
+    icon: <ShieldCheck size={17} strokeWidth={1.8} />,
+  },
+  {
+    id: "direct",
+    label: "全局直连",
+    badge: "直连兜底",
+    description: "所选规则优先，其余流量全部交给 direct。",
+    icon: <Route size={17} strokeWidth={1.8} />,
+  },
+];
+
+interface RouteModeCardProps {
+  mode: RouteMode;
+  onChange: (mode: RouteMode) => void;
+}
+
+function RouteModeCard({ mode, onChange }: RouteModeCardProps) {
+  const activeOption =
+    ROUTE_MODE_OPTIONS.find((option) => option.id === mode) ??
+    ROUTE_MODE_OPTIONS[0];
+
+  function selectMode(nextMode: RouteMode) {
+    onChange(nextMode);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`route-mode-${nextMode}`)?.focus();
+    });
+  }
+
+  function handleModeKeyDown(
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) {
+    if (
+      event.key !== "ArrowLeft" &&
+      event.key !== "ArrowRight" &&
+      event.key !== "ArrowUp" &&
+      event.key !== "ArrowDown" &&
+      event.key !== "Home" &&
+      event.key !== "End"
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    let nextIndex = index;
+    if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = ROUTE_MODE_OPTIONS.length - 1;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      nextIndex =
+        (index - 1 + ROUTE_MODE_OPTIONS.length) % ROUTE_MODE_OPTIONS.length;
+    } else {
+      nextIndex = (index + 1) % ROUTE_MODE_OPTIONS.length;
+    }
+    selectMode(ROUTE_MODE_OPTIONS[nextIndex].id);
+  }
+
+  return (
+    <section className="route-mode-card">
+      <div className="route-mode-head">
+        <div className="route-mode-heading">
+          <span className="card-eyebrow">TRAFFIC TAKEOVER</span>
+          <h3>流量接管方式</h3>
+          <p>平台与自定义域名先按标签分流，再决定其余流量如何处理。</p>
+        </div>
+        <span
+          className={`route-mode-state ${
+            mode !== "media" ? "is-takeover" : ""
+          }`}
+        >
+          <span className="runtime-dot" />
+          {activeOption.label}
+        </span>
+      </div>
+
+      <div
+        className="route-mode-grid"
+        role="radiogroup"
+        aria-label="流量接管方式"
+      >
+        {ROUTE_MODE_OPTIONS.map((option, index) => {
+          const selected = option.id === mode;
+          return (
+            <button
+              type="button"
+              role="radio"
+              id={`route-mode-${option.id}`}
+              key={option.id}
+              aria-checked={selected}
+              tabIndex={selected ? 0 : -1}
+              className={`route-mode-option ${selected ? "is-active" : ""}`}
+              onClick={() => selectMode(option.id)}
+              onKeyDown={(event) => handleModeKeyDown(event, index)}
+            >
+              <span className="route-mode-icon">{option.icon}</span>
+              <span className="route-mode-copy">
+                <span className="route-mode-title">
+                  <strong>{option.label}</strong>
+                  <span className="route-mode-badge">{option.badge}</span>
+                </span>
+                <small>{option.description}</small>
+              </span>
+              <span className="route-mode-check" aria-hidden="true">
+                {selected ? <Check size={11} strokeWidth={2.5} /> : null}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="route-mode-foot">
+        <Info size={13} />
+        {mode === "media" ? (
+          <p>不会添加兜底规则；未命中的流量仍由节点的默认路由处理。</p>
+        ) : mode === "global" ? (
+          <p>
+            会先放行私有网段，再添加 <code>network: "tcp,udp"</code>{" "}
+            的代理兜底规则，其余流量交给全局 outboundTag。
+          </p>
+        ) : mode === "bypass" ? (
+          <p>
+            会先放行私有网段、<code>geosite:cn</code> 与{" "}
+            <code>geoip:cn</code>，其余流量再交给全局 outboundTag。
+          </p>
+        ) : (
+          <p>
+            末尾会添加一条 <code>network: "tcp,udp"</code>{" "}
+            的直连兜底规则；所选平台和自定义域名仍优先匹配。
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export function RouteGenerator() {
   const [activeTool, setActiveTool] = useState<BuilderTool>("routes");
   const [config, setConfig] = useState<GeneratorState>(createInitialState);
@@ -631,17 +818,25 @@ export function RouteGenerator() {
   const result = useMemo(
     () =>
       generateRoutes({
+        routeMode: config.routeMode,
         selectedIds,
         globalTag: config.globalTag,
         perCategory: config.perCategory,
         categoryTags: config.categoryTags,
         includeGeosite: config.includeGeosite,
+        blockAds: config.blockAds,
         blockTorrent: config.blockTorrent,
         customDomains: config.customDomains,
         customDomainsTag: config.customDomainsTag,
       }),
     [selectedIds, config],
   );
+  const requiresGlobalTag =
+    config.routeMode === "global" ||
+    config.routeMode === "bypass" ||
+    (!config.perCategory && hasSelection) ||
+    (result.customDomainCount > 0 &&
+      !config.customDomainsTag.trim());
 
   const presets = useMemo(
     () => [
@@ -781,7 +976,7 @@ export function RouteGenerator() {
                   <span className="tab-label-full">自定义 Routes</span>
                   <span className="tab-label-short">Routes</span>
                 </strong>
-                <small>流媒体域名分流</small>
+                <small>分流与全局接管</small>
               </span>
               <span className="builder-switch-count">
                 {String(selectedIds.size).padStart(2, "0")}
@@ -844,9 +1039,9 @@ export function RouteGenerator() {
             <div className="section-heading">
           <div className="section-heading-copy">
             <span className="section-eyebrow">01 / ROUTE BUILDER</span>
-            <h2>选择需要解锁的平台</h2>
+            <h2>配置流量如何分流</h2>
             <p>
-              自动合并重复域名并生成 Xray 原生规则。所有处理都在本地完成。
+              勾选平台做精细分流，或选择全局代理、绕过大陆等模式接管全部流量。
             </p>
           </div>
           <div className="selection-summary">
@@ -859,6 +1054,11 @@ export function RouteGenerator() {
             </span>
           </div>
             </div>
+
+            <RouteModeCard
+              mode={config.routeMode}
+              onChange={(routeMode) => updateConfig({ routeMode })}
+            />
 
             <div className="library-toolbar">
           <div className="search-shell">
@@ -936,8 +1136,9 @@ export function RouteGenerator() {
               globalTag={config.globalTag}
               perCategory={config.perCategory}
               includeGeosite={config.includeGeosite}
+              blockAds={config.blockAds}
               blockTorrent={config.blockTorrent}
-              hasSelection={hasSelection}
+              requiresGlobalTag={requiresGlobalTag}
               outboundTags={outboundTags}
               onGlobalTagChange={(tag) =>
                 updateConfig({ globalTag: tag })
@@ -948,6 +1149,7 @@ export function RouteGenerator() {
               onIncludeGeositeChange={(includeGeosite) =>
                 updateConfig({ includeGeosite })
               }
+              onBlockAdsChange={(blockAds) => updateConfig({ blockAds })}
               onBlockTorrentChange={(blockTorrent) =>
                 updateConfig({ blockTorrent })
               }
